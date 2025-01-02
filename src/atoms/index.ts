@@ -32,6 +32,25 @@ export const currentSourcesAtom = atom((get) => {
   })
 })
 
+export const blockKeywordsAtom = atom<string[]>({
+  key: "blockKeywords",
+  default: [],
+})
+
+blockKeywordsAtom.onMount = (setAtom) => {
+  try {
+    const stored = localStorage.getItem("blockKeywords")
+    if (stored) {
+      const parsed = JSON.parse(stored)
+      if (Array.isArray(parsed)) {
+        setAtom(parsed.filter(item => typeof item === "string"))
+      }
+    }
+  } catch (error) {
+    console.error("Failed to load block keywords:", error)
+  }
+}
+
 export const goToTopAtom = atom({
   ok: false,
   el: undefined as HTMLElement | undefined,

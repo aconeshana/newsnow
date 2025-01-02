@@ -96,7 +96,7 @@
     "vite-plugin-with-nitro": "0.0.3",
     "vitest": "^2.1.2",
     "workbox-window": "^7.1.0",
-    "wrangler": "^3.80.3"
+    "wrangler": "^3.83.0"
   },
   "pnpm": {
     "patchedDependencies": {

@@ -4,7 +4,9 @@ import { AnimatePresence, motion, useInView } from "framer-motion"
 import { useWindowSize } from "react-use"
 import { forwardRef, useImperativeHandle } from "react"
 import { OverlayScrollbar } from "../common/overlay-scrollbar"
+import { BlockButton } from "../block-button"
 import { safeParseString } from "~/utils"
+import { useBlock } from "~/hooks/useBlock"
 
 export interface ItemsProps extends React.HTMLAttributes<HTMLDivElement> {
   id: SourceID
@@ -51,6 +53,7 @@ export const CardWrapper = forwardRef<HTMLElement, ItemsProps>(({ id, isDragging
 })
 
 function NewsCard({ id, setHandleRef }: NewsCardProps) {
+  const source = sources[id]
   const { refresh } = useRefetch()
   const { data, isFetching, isError } = useQuery({
     queryKey: ["source", id],
@@ -75,73 +78,56 @@ function NewsCard({ id, setHandleRef }: NewsCardProps) {
 
       function diff() {
         try {
-          if (response.items && sources[id].type === "hottest" && cacheSources.has(id)) {
-            response.items.forEach((item, i) => {
-              const o = cacheSources.get(id)!.items.findIndex(k => k.id === item.id)
+          const cache = cacheSources.get(id)
+          if (!cache?.items?.length || !response.items?.length) return
+          const oldIds = new Set(cache.items.map(i => i.id))
+          response.items.forEach((item) => {
+            if (!oldIds.has(item.id)) {
               item.extra = {
-                ...item?.extra,
-                diff: o === -1 ? undefined : o - i,
+                ...item.extra,
+                diff: 1,
               }
-            })
-          }
-        } catch (e) {
-          console.error(e)
+            }
+          })
+        } catch (error) {
+          console.error(error)
         }
       }
 
       diff()
-
       cacheSources.set(id, response)
       return response
     },
-    placeholderData: prev => prev,
-    staleTime: Infinity,
-    refetchOnMount: false,
-    refetchOnReconnect: false,
-    refetchOnWindowFocus: false,
-    retry: false,
   })
-
   const { isFocused, toggleFocus } = useFocusWith(id)
 
   return (
-    <>
-      <div className={$("flex justify-between mx-2 mt-0 mb-2 items-center")}>
-        <div className="flex gap-2 items-center">
+    <div className="relative" ref={setHandleRef}>
+      <div className="flex items-center justify-between p-2 bg-neutral-400/5 rounded-t">
+        <div className="flex items-center gap-2">
           <a
-            className={$("w-8 h-8 rounded-full bg-cover")}
+            className={$("w-4 h-4 rounded-full bg-cover")}
             target="_blank"
-            href={sources[id].home}
-            title={sources[id].desc}
+            href={source.home}
+            title={source.desc}
             style={{
               backgroundImage: `url(/icons/${id.split("-")[0]}.png)`,
             }}
           />
-          <span className="flex flex-col">
-            <span className="flex items-center gap-2">
-              <span
-                className="text-xl font-bold"
-                title={sources[id].desc}
-              >
-                {sources[id].name}
-              </span>
-              {sources[id]?.title && <span className={$("text-sm", `color-${sources[id].color} bg-base op-80 bg-op-50! px-1 rounded`)}>{sources[id].title}</span>}
-            </span>
-            <span className="text-xs op-70"><UpdatedTime isError={isError} updatedTime={data?.updatedTime} /></span>
-          </span>
+          <span>{source.name}</span>
         </div>
-        <div className={$("flex gap-2 text-lg", `color-${sources[id].color}`)}>
+        <div className={$("flex gap-2 text-lg", `color-${source.color}`)}>
           <button
             type="button"
             className={$("btn i-ph:arrow-counter-clockwise-duotone", isFetching && "animate-spin i-ph:circle-dashed-duotone")}
-            onClick={() => refresh(id)}
+            onClick={() => refresh()}
           />
           <button
             type="button"
             className={$("btn", isFocused ? "i-ph:star-fill" : "i-ph:star-duotone")}
             onClick={toggleFocus}
           />
-          {/* firefox cannot drag a button */}
+          <BlockButton sourceId={id} title={source.name} />
           {setHandleRef && (
             <div
               ref={setHandleRef}
@@ -151,30 +137,193 @@ function NewsCard({ id, setHandleRef }: NewsCardProps) {
         </div>
       </div>
 
-      <OverlayScrollbar
-        className={$([
-          "h-full p-2 overflow-y-auto rounded-2xl bg-base bg-op-70!",
-          isFetching && `animate-pulse`,
-          `sprinkle-${sources[id].color}`,
-        ])}
-        options={{
-          overflow: { x: "hidden" },
-        }}
-        defer
-      >
-        <div className={$("transition-opacity-500", isFetching && "op-20")}>
-          {!!data?.items?.length && (sources[id].type === "hottest" ? <NewsListHot items={data.items} /> : <NewsListTimeLine items={data.items} />)}
+      <OverlayScrollbar className="h-[calc(100vh-20rem)]">
+        <div className="px-2 py-4">
+          {isError && (
+            <div className="text-center text-red-600">
+              <span className="i-ph:warning-circle-duotone" />
+              <span>加载失败</span>
+            </div>
+          )}
+          {!!data?.items?.length && (source.type === "hottest" ? <NewsListHot items={data.items} /> : <NewsListTimeLine items={data.items} />)}
         </div>
       </OverlayScrollbar>
-    </>
+    </div>
   )
 }
 
-function UpdatedTime({ isError, updatedTime }: { updatedTime: any, isError: boolean }) {
-  const relativeTime = useRelativeTime(updatedTime ?? "")
-  if (relativeTime) return `${relativeTime}更新`
-  if (isError) return "获取失败"
-  return "加载中..."
+function NewsListTimeLine({ items }: { items: NewsItem[] }) {
+  const { width } = useWindowSize()
+  const { isBlocked } = useBlock()
+
+  // 分离被拦截和未被拦截的新闻
+  const [normalItems, blockedItems] = items.reduce<[NewsItem[], NewsItem[]]>(
+    (acc, item) => {
+      if (isBlocked(item.title)) {
+        acc[1].push(item)
+      } else {
+        acc[0].push(item)
+      }
+      return acc
+    },
+    [[], []],
+  )
+
+  return (
+    <div className="h-full">
+      <ol className="border-s border-neutral-400/50 flex flex-col ml-1">
+        {normalItems?.map(item => (
+          <li key={item.id} className="flex flex-col">
+            <span className="flex items-center gap-1 text-neutral-400/50 ml--1px">
+              <span className="">-</span>
+              <span className="text-xs text-neutral-400/80">
+                {(item.pubDate || item?.extra?.date) && <NewsUpdatedTime date={(item.pubDate || item?.extra?.date)!} />}
+              </span>
+              <span className="text-xs text-neutral-400/80">
+                <ExtraInfo item={item} />
+              </span>
+            </span>
+            <a
+              className={$("ml-2 px-1 hover:bg-neutral-400/10 rounded-md visited:(text-neutral-400/80)")}
+              href={width < 768 ? item.mobileUrl || item.url : item.url}
+              title={item.extra?.hover}
+              target="_blank"
+            >
+              {item.title}
+            </a>
+          </li>
+        ))}
+
+        {blockedItems.length > 0 && (
+          <li className="flex flex-col mt-4">
+            <span className="text-sm text-neutral-400/80">
+              已折叠
+              {blockedItems.length}
+              {" "}
+              条包含关键词的新闻
+            </span>
+            <details className="ml-2">
+              <summary className="cursor-pointer hover:text-neutral-600">查看详情</summary>
+              <ol className="mt-2">
+                {blockedItems.map(item => (
+                  <li key={item.id} className="flex flex-col opacity-50">
+                    <span className="flex items-center gap-1 text-neutral-400/50 ml--1px">
+                      <span className="">-</span>
+                      <span className="text-xs text-neutral-400/80">
+                        {(item.pubDate || item?.extra?.date) && <NewsUpdatedTime date={(item.pubDate || item?.extra?.date)!} />}
+                      </span>
+                      <span className="text-xs text-neutral-400/80">
+                        <ExtraInfo item={item} />
+                      </span>
+                    </span>
+                    <a
+                      className={$("ml-2 px-1 hover:bg-neutral-400/10 rounded-md visited:(text-neutral-400/80)")}
+                      href={width < 768 ? item.mobileUrl || item.url : item.url}
+                      title={item.extra?.hover}
+                      target="_blank"
+                    >
+                      {item.title}
+                    </a>
+                  </li>
+                ))}
+              </ol>
+            </details>
+          </li>
+        )}
+      </ol>
+    </div>
+  )
+}
+
+function NewsListHot({ items }: { items: NewsItem[] }) {
+  const { width } = useWindowSize()
+  const { isBlocked } = useBlock()
+
+  // 分离被拦截和未被拦截的新闻
+  const [normalItems, blockedItems] = items.reduce<[NewsItem[], NewsItem[]]>(
+    (acc, item) => {
+      if (isBlocked(item.title)) {
+        acc[1].push(item)
+      } else {
+        acc[0].push(item)
+      }
+      return acc
+    },
+    [[], []],
+  )
+
+  return (
+    <div className="h-full">
+      <ol className="flex flex-col gap-2">
+        {normalItems?.map((item, i) => (
+          <a
+            href={width < 768 ? item.mobileUrl || item.url : item.url}
+            target="_blank"
+            key={item.id}
+            title={item.extra?.hover}
+            className={$(
+              "flex gap-2 items-center items-stretch relative",
+              "hover:bg-neutral-400/10 rounded-md pr-1 visited:(text-neutral-400)",
+            )}
+          >
+            <span className={$("bg-neutral-400/10 min-w-6 flex justify-center items-center rounded-md text-sm")}>
+              {i + 1}
+            </span>
+            {!!item.extra?.diff && <DiffNumber diff={item.extra.diff} />}
+            <span className="self-start line-height-none">
+              <span className="mr-2 text-base">
+                {item.title}
+              </span>
+              <span className="text-xs text-neutral-400/80 truncate align-middle">
+                <ExtraInfo item={item} />
+              </span>
+            </span>
+          </a>
+        ))}
+
+        {blockedItems.length > 0 && (
+          <div className="mt-4">
+            <span className="text-sm text-neutral-400/80">
+              已折叠
+              {blockedItems.length}
+              {" "}
+              条包含关键词的新闻
+            </span>
+            <details className="ml-2">
+              <summary className="cursor-pointer hover:text-neutral-600">查看详情</summary>
+              <ol className="mt-2">
+                {blockedItems.map((item, i) => (
+                  <a
+                    href={width < 768 ? item.mobileUrl || item.url : item.url}
+                    target="_blank"
+                    key={item.id}
+                    title={item.extra?.hover}
+                    className={$(
+                      "flex gap-2 items-center items-stretch relative opacity-50",
+                      "hover:bg-neutral-400/10 rounded-md pr-1 visited:(text-neutral-400)",
+                    )}
+                  >
+                    <span className={$("bg-neutral-400/10 min-w-6 flex justify-center items-center rounded-md text-sm")}>
+                      {i + 1}
+                    </span>
+                    {!!item.extra?.diff && <DiffNumber diff={item.extra.diff} />}
+                    <span className="self-start line-height-none">
+                      <span className="mr-2 text-base">
+                        {item.title}
+                      </span>
+                      <span className="text-xs text-neutral-400/80 truncate align-middle">
+                        <ExtraInfo item={item} />
+                      </span>
+                    </span>
+                  </a>
+                ))}
+              </ol>
+            </details>
+          </div>
+        )}
+      </ol>
+    </div>
+  )
 }
 
 function DiffNumber({ diff }: { diff: number }) {
@@ -202,6 +351,7 @@ function DiffNumber({ diff }: { diff: number }) {
     </AnimatePresence>
   )
 }
+
 function ExtraInfo({ item }: { item: NewsItem }) {
   if (item?.extra?.info) {
     return <>{item.extra.info}</>
@@ -224,65 +374,4 @@ function ExtraInfo({ item }: { item: NewsItem }) {
 function NewsUpdatedTime({ date }: { date: string | number }) {
   const relativeTime = useRelativeTime(date)
   return <>{relativeTime}</>
-}
-function NewsListHot({ items }: { items: NewsItem[] }) {
-  const { width } = useWindowSize()
-  return (
-    <ol className="flex flex-col gap-2">
-      {items?.map((item, i) => (
-        <a
-          href={width < 768 ? item.mobileUrl || item.url : item.url}
-          target="_blank"
-          key={item.id}
-          title={item.extra?.hover}
-          className={$(
-            "flex gap-2 items-center items-stretch relative",
-            "hover:bg-neutral-400/10 rounded-md pr-1 visited:(text-neutral-400)",
-          )}
-        >
-          <span className={$("bg-neutral-400/10 min-w-6 flex justify-center items-center rounded-md text-sm")}>
-            {i + 1}
-          </span>
-          {!!item.extra?.diff && <DiffNumber diff={item.extra.diff} />}
-          <span className="self-start line-height-none">
-            <span className="mr-2 text-base">
-              {item.title}
-            </span>
-            <span className="text-xs text-neutral-400/80 truncate align-middle">
-              <ExtraInfo item={item} />
-            </span>
-          </span>
-        </a>
-      ))}
-    </ol>
-  )
-}
-
-function NewsListTimeLine({ items }: { items: NewsItem[] }) {
-  const { width } = useWindowSize()
-  return (
-    <ol className="border-s border-neutral-400/50 flex flex-col ml-1">
-      {items?.map(item => (
-        <li key={item.id} className="flex flex-col">
-          <span className="flex items-center gap-1 text-neutral-400/50 ml--1px">
-            <span className="">-</span>
-            <span className="text-xs text-neutral-400/80">
-              {(item.pubDate || item?.extra?.date) && <NewsUpdatedTime date={(item.pubDate || item?.extra?.date)!} />}
-            </span>
-            <span className="text-xs text-neutral-400/80">
-              <ExtraInfo item={item} />
-            </span>
-          </span>
-          <a
-            className={$("ml-2 px-1 hover:bg-neutral-400/10 rounded-md visited:(text-neutral-400/80)")}
-            href={width < 768 ? item.mobileUrl || item.url : item.url}
-            title={item.extra?.hover}
-            target="_blank"
-          >
-            {item.title}
-          </a>
-        </li>
-      ))}
-    </ol>
-  )
 }
